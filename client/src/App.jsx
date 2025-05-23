@@ -1,59 +1,178 @@
-import { useEffect, useState } from 'react';
-import axios from 'axios';
+import { useEffect, useState } from "react";
+import axios from "axios";
 
 function App() {
   const [todos, setTodos] = useState([]);
   const [title, setTitle] = useState("");
+  const [error, setError] = useState(null);
+  const [theme, setTheme] = useState("light");
+  const [initialLoading, setInitialLoading] = useState(true); // Only for initial load
 
   useEffect(() => {
-    axios.get('/api/todos').then(res => setTodos(res.data));
+    const fetchTodos = async () => {
+      try {
+        const res = await axios.get("/api/todos");
+        setTodos(res.data);
+      } catch (err) {
+        setError("Failed to fetch todos");
+        console.error(err);
+      } finally {
+        setInitialLoading(false);
+      }
+    };
+    fetchTodos();
   }, []);
 
   const addTodo = async () => {
-    if (!title) return;
-    const res = await axios.post('/api/todos', { title });
-    setTodos([...todos, res.data]);
-    setTitle('');
+    if (!title.trim()) return;
+
+    // Create a temporary ID (timestamp + random)
+    const tempId = `temp-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+
+    // Optimistically add todo to UI right away
+    const newTodo = { _id: tempId, title, completed: false };
+    setTodos([...todos, newTodo]);
+    setTitle("");
+
+    // Send to server in background
+    try {
+      const res = await axios.post("/api/todos", { title });
+      // Replace temp todo with real one from server
+      setTodos((prev) =>
+        prev.map((todo) => (todo._id === tempId ? res.data : todo))
+      );
+    } catch (err) {
+      // If server request fails, show error and remove optimistic todo
+      setError("Failed to add todo");
+      setTodos((prev) => prev.filter((todo) => todo._id !== tempId));
+      console.error(err);
+    }
   };
 
   const deleteTodo = async (id) => {
-    await axios.delete(`/api/todos/${id}`);
-    setTodos(todos.filter(todo => todo._id !== id));
+    // Optimistically remove from UI
+    const previousTodos = [...todos];
+    setTodos(todos.filter((todo) => todo._id !== id));
+
+    // Send to server in background
+    try {
+      await axios.delete(`/api/todos/${id}`);
+    } catch (err) {
+      // Restore on error
+      setError("Failed to delete todo");
+      setTodos(previousTodos);
+      console.error(err);
+    }
   };
 
   const toggleTodo = async (todo) => {
-    const res = await axios.put(`/api/todos/${todo._id}`, {
-      ...todo,
-      completed: !todo.completed
-    });
-    setTodos(todos.map(t => t._id === todo._id ? res.data : t));
+    // Optimistically update UI
+    const previousTodos = [...todos];
+    setTodos(
+      todos.map((t) =>
+        t._id === todo._id ? { ...t, completed: !t.completed } : t
+      )
+    );
+
+    // Send to server in background
+    try {
+      await axios.put(`/api/todos/${todo._id}`, {
+        ...todo,
+        completed: !todo.completed,
+      });
+    } catch (err) {
+      // Restore on error
+      setError("Failed to update todo");
+      setTodos(previousTodos);
+      console.error(err);
+    }
+  };
+
+  const handleKeyDown = (e) => {
+    if (e.key === "Enter") {
+      addTodo();
+    }
+  };
+
+  const toggleTheme = () => {
+    const newTheme = theme === "light" ? "dark" : "light";
+    setTheme(newTheme);
+    document.documentElement.setAttribute("data-theme", newTheme);
   };
 
   return (
-    <div style={{ padding: 20 }}>
-      <h1>TODO App</h1>
-      <input
-        value={title}
-        onChange={e => setTitle(e.target.value)}
-        placeholder="Add new todo"
-      />
-      <button onClick={addTodo}>Add</button>
-      <ul>
-        {todos.map(todo => (
-          <li key={todo._id}>
-            <span
-              onClick={() => toggleTodo(todo)}
-              style={{
-                textDecoration: todo.completed ? 'line-through' : 'none',
-                cursor: 'pointer',
-              }}
+    <div className="app-container" data-theme={theme}>
+      <button onClick={toggleTheme} className="theme-toggle">
+        {theme === "light" ? "🌙" : "☀️"}
+      </button>
+
+      <header className="app-header">
+        <h1>Todo App</h1>
+        {error && <div className="error-message">{error}</div>}
+      </header>
+
+      <div className="input-container">
+        <input
+          type="text"
+          value={title}
+          onChange={(e) => {
+            setTitle(e.target.value);
+            setError(null);
+          }}
+          onKeyDown={handleKeyDown}
+          placeholder="What needs to be done?"
+          className="todo-input"
+        />
+        <button onClick={addTodo} className="add-button">
+          Add Todo
+        </button>
+      </div>
+
+      {initialLoading ? (
+        <div className="loading">
+          <div className="spinner"></div>
+          Loading...
+        </div>
+      ) : (
+        <ul className="todo-list">
+          {todos.map((todo) => (
+            <li
+              key={todo._id}
+              className={`todo-item ${todo.completed ? "completed" : ""} ${
+                todo._id.startsWith("temp-") ? "temp-item" : ""
+              }`}
             >
-              {todo.title}
-            </span>
-            <button onClick={() => deleteTodo(todo._id)}>❌</button>
-          </li>
-        ))}
-      </ul>
+              <div className="todo-content">
+                <input
+                  type="checkbox"
+                  checked={todo.completed}
+                  onChange={() => toggleTodo(todo)}
+                  className="todo-checkbox"
+                />
+                <span className="todo-text">{todo.title}</span>
+              </div>
+              <button
+                onClick={() => deleteTodo(todo._id)}
+                className="delete-button"
+                aria-label="Delete todo"
+              >
+                🗑️
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {todos.length > 0 && (
+        <div className="stats">
+          <span className="completed-count">
+            {todos.filter((t) => t.completed).length}
+          </span>
+          <span> of </span>
+          <span className="total-count">{todos.length}</span>
+          <span> tasks completed</span>
+        </div>
+      )}
     </div>
   );
 }
